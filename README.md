@@ -87,6 +87,7 @@ Create solo se l'unità risponde su Modbus TCP (porta 502).
 | `select` | Season | Stagione (`auto` / `winter` / `summer`) — **modificabile** |
 | `select` / `sensor` | Bypass Mode | Gestione bypass (`auto` / `off` / `on`). **Modificabile** solo se il bypass è configurato come *universale* (menù Fabbrica): altrimenti l'unità ignora l'impostazione, e viene mostrata come sensore diagnostico |
 | `number` | Temperature Setpoint | Set-point temperatura, passi di 0,2 °C — **modificabile** |
+| `switch` | Free Cooling | Consente o blocca il free-cooling del bypass stagionale (vedi sotto) — pensato per essere comandato da un termostato |
 | `number` | Boost Timer | Minuti di booster: impostarlo avvia il booster, 0 lo annulla |
 | `sensor` | Filter Alarm Threshold | Soglia ore dell'allarme filtri — diagnostica |
 | `binary_sensor` | Anti-Frost | Antigelo scambiatore attivo |
@@ -128,6 +129,26 @@ Due particolarità del pannello, verificate su una Pure 250:
   restano dopo oltre due minuti senza alcun accesso. Fa eccezione il booster, che è un conto alla
   rovescia e non viene salvato. Chi automatizza la velocità con cambi molto frequenti tenga presente che
   ogni cambio è una scrittura sulla memoria non volatile dell'unità, come lo sarebbe dal pannello.
+
+### Free cooling e termostato
+
+Un bypass *stagionale* non si comanda: l'unità lo apre da sola, in estate quando fuori è più fresco che
+dentro (free cooling), in inverno quando fuori è più caldo (free heating). Non conosce però una
+temperatura desiderata, e in una notte d'estate continua a raffrescare la casa ben oltre il comfort.
+
+L'interruttore **Free Cooling** colma questa lacuna:
+
+- **acceso** → stagione *estate*: l'unità fa free cooling ogni volta che può;
+- **spento** → il bypass viene tenuto chiuso, mantenendo l'unità sulla stagione la cui condizione non è
+  soddisfatta (*inverno* finché fuori è più freddo che dentro, *estate* quando è più caldo): lo
+  scambiatore conserva così la temperatura di casa. La stagione segue la temperatura esterna con
+  un'isteresi di 0,5 °C e non più di un cambio ogni 15 minuti (ogni cambio è una scrittura nella memoria
+  non volatile dell'unità). A ventilatori fermi le sonde misurano solo i condotti, e nulla viene cambiato.
+
+Collegato come *raffrescatore* di un termostato di Home Assistant (ad esempio l'helper **Termostato
+generico** in modalità raffrescamento, con la temperatura di ripresa come sensore), il free cooling si
+ferma quando la casa ha raggiunto la temperatura desiderata. Con un bypass *universale* l'interruttore
+non viene creato: lì il bypass si comanda direttamente da *Bypass Mode*.
 
 ## Diagnostica
 

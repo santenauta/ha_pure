@@ -22,6 +22,7 @@ PLATFORMS = [
     Platform.FAN,
     Platform.NUMBER,
     Platform.SELECT,
+    Platform.SWITCH,
 ]
 
 

@@ -161,6 +161,11 @@
           "on": "Open"
         }
       }
+    },
+    "switch": {
+      "free_cooling": {
+        "name": "Free Cooling"
+      }
     }
   }
 }
