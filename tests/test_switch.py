@@ -61,6 +61,13 @@ async def test_off_holds_the_bypass_closed(
     assert panel.registers[20] & 0b11 == WINTER
     assert panel.stored[-1] == 0b01  # a configuration change, stored
 
+    # On "winter" the unit still free-cools a house above its winter set-point,
+    # so on the next poll that set-point goes out of reach
+    assert panel.registers[52] == 260
+    await _refresh(hass, entry)
+    assert panel.registers[52] == 300
+    assert panel.stored[-1] == 0b10
+
     # Morning: outside becomes warmer than inside. "winter" would now open the
     # bypass for free heating, so it has to be "summer" again - but not more
     # often than the minimum interval allows.
@@ -87,6 +94,23 @@ async def test_dead_band_and_stopped_fans_change_nothing(
         _set_temperatures(panel, outside=15.0, inside=25.0)
         await _refresh(hass, entry)
         assert panel.registers[20] & 0b11 == SUMMER
+
+
+async def test_setpoint_is_left_alone_with_a_heater(
+    hass: HomeAssistant, panel: FakePanel, socket_enabled
+) -> None:
+    panel.registers[7] = 1  # an electric post-heater: the set-point is its target
+    panel.registers[87] = 1200
+    _set_temperatures(panel, outside=19.0, inside=25.0)
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_HOST: HOST})
+    entry.add_to_hass(hass)
+    with _modbus_on(panel):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    await _turn(hass, "turn_off")
+    await _refresh(hass, entry)
+    assert panel.registers[20] & 0b11 == WINTER
+    assert panel.registers[52] == 260
 
 
 async def test_on_returns_to_summer(

@@ -16,7 +16,13 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .const import DOMAIN
 from .coordinator import PureCoordinator
 from .entity_base import PureEntity
-from .modbus import REG_PARAMETER_FLAGS, SEASON_MASK, SEASONS, PureModbusError
+from .modbus import (
+    REG_PARAMETER_FLAGS,
+    REG_TEMP_SETPOINT,
+    SEASON_MASK,
+    SEASONS,
+    PureModbusError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +31,11 @@ _LOGGER = logging.getLogger(__name__)
 # write to the unit's non-volatile memory.
 TEMPERATURE_HYSTERESIS = 0.5  # °C
 MIN_SEASON_CHANGE_INTERVAL = 15 * 60  # seconds
+
+# In "winter" the unit still opens the bypass to cool a house that is above its
+# winter set-point. Holding the bypass closed therefore also takes a winter
+# set-point no house reaches: the highest one the unit accepts.
+HOLD_SETPOINT = 30.0  # °C
 
 
 async def async_setup_entry(
@@ -43,19 +54,25 @@ async def async_setup_entry(
 class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
     """Lets a thermostat decide when the bypass may bring outside air in.
 
-    A seasonal bypass cannot be commanded. The unit opens it by itself: in
-    summer when outside is colder than inside (free cooling), in winter when
-    outside is warmer (free heating). It has no target temperature though, so
-    on a summer night it keeps cooling the house well past comfortable.
+    A seasonal bypass cannot be commanded. The unit opens it by itself, as
+    observed on a Pure 250 (the manual tells only half of it):
+
+      summer -> whenever outside is colder than inside, whatever the set-point:
+                on a summer night it cools the house well past comfortable;
+      winter -> when outside is warmer than inside (free heating), and also
+                when outside is colder while the house is above the winter
+                set-point. The set-point is stored per season.
+
+    It reacts one to four minutes after a change. So:
 
       on  -> season "summer": the unit free-cools whenever it can.
-      off -> the bypass is held closed, by keeping the unit on the season whose
-             condition is not met: "winter" while outside is colder than
-             inside, "summer" while it is warmer. The heat exchanger then keeps
-             the house as it is.
+      off -> the bypass is held closed: "winter" with the winter set-point at
+             its maximum while outside is colder than inside, "summer" while it
+             is warmer. The heat exchanger then keeps the house as it is.
 
     The temperatures are only meaningful while the fans run; with the fans
-    stopped nothing is changed when off.
+    stopped the season is left alone. The set-point is left alone on units that
+    report a post-heater, where it is what the heater aims for.
     """
 
     _attr_translation_key = "free_cooling"
@@ -98,8 +115,11 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         super()._handle_coordinator_update()
-        # While off, the season has to follow the outside temperature
-        if not self._allowed and self._wanted_season() is not None:
+        # While off, the season has to follow the outside temperature, and
+        # the winter set-point has to be out of the house's reach
+        if not self._allowed and (
+            self._wanted_season() is not None or self._setpoint_needs_raising()
+        ):
             self.hass.async_create_task(self._async_follow())
 
     async def _async_follow(self) -> None:
@@ -125,11 +145,36 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
                 return None
         return None if data.get("season") == wanted else wanted
 
+    def _setpoint_needs_raising(self) -> bool:
+        """Whether the winter set-point would still let the unit open the bypass.
+
+        The register shows the set-point of the season the unit is on, and only
+        settles a moment after a season change: so this is looked at on the
+        polls that follow one, never in the same breath.
+        """
+        data = self.coordinator.data
+        setpoint = data.get("temp_setpoint")
+        return (
+            not self._allowed
+            and data.get("season") == "winter"
+            and not data.get("heater_fitted")
+            and setpoint is not None
+            and setpoint < HOLD_SETPOINT
+        )
+
     async def _async_apply(self, commanded: bool) -> None:
         if self._applying:
             return
         wanted = self._wanted_season()
         if wanted is None:
+            if self._setpoint_needs_raising():
+                self._applying = True
+                try:
+                    await self.coordinator.async_write_register(
+                        REG_TEMP_SETPOINT, int(HOLD_SETPOINT * 10)
+                    )
+                finally:
+                    self._applying = False
             return
         now = monotonic()
         if (

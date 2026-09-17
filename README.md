@@ -132,18 +132,23 @@ Due particolarità del pannello, verificate su una Pure 250:
 
 ### Free cooling e termostato
 
-Un bypass *stagionale* non si comanda: l'unità lo apre da sola, in estate quando fuori è più fresco che
-dentro (free cooling), in inverno quando fuori è più caldo (free heating). Non conosce però una
-temperatura desiderata, e in una notte d'estate continua a raffrescare la casa ben oltre il comfort.
+Un bypass *stagionale* non si comanda: l'unità lo apre da sola. Come osservato su una Pure 250 (il
+manuale ne racconta solo metà):
 
-L'interruttore **Free Cooling** colma questa lacuna:
+- in **estate** lo apre ogni volta che fuori è più fresco che dentro, qualunque sia il set-point: in una
+  notte d'estate continua a raffrescare la casa ben oltre il comfort;
+- in **inverno** lo apre quando fuori è più caldo che dentro (free heating) e anche quando fuori è più
+  fresco ma la casa è sopra il set-point invernale. Il set-point è memorizzato per stagione.
+
+Reagisce da uno a quattro minuti dopo un cambio. L'interruttore **Free Cooling** sfrutta questo:
 
 - **acceso** → stagione *estate*: l'unità fa free cooling ogni volta che può;
-- **spento** → il bypass viene tenuto chiuso, mantenendo l'unità sulla stagione la cui condizione non è
-  soddisfatta (*inverno* finché fuori è più freddo che dentro, *estate* quando è più caldo): lo
-  scambiatore conserva così la temperatura di casa. La stagione segue la temperatura esterna con
-  un'isteresi di 0,5 °C e non più di un cambio ogni 15 minuti (ogni cambio è una scrittura nella memoria
-  non volatile dell'unità). A ventilatori fermi le sonde misurano solo i condotti, e nulla viene cambiato.
+- **spento** → il bypass viene tenuto chiuso: *inverno* con il set-point invernale al massimo (30 °C) finché
+  fuori è più freddo che dentro, *estate* quando è più caldo; lo scambiatore conserva così la temperatura
+  di casa. La stagione segue la temperatura esterna con un'isteresi di 0,5 °C e non più di un cambio
+  ogni 15 minuti (ogni cambio è una scrittura nella memoria non volatile dell'unità). A ventilatori fermi
+  le sonde misurano solo i condotti, e la stagione non viene toccata. Sulle unità che dichiarano un
+  post-riscaldamento il set-point non viene toccato, perché lì è la temperatura a cui punta la batteria.
 
 Collegato come *raffrescatore* di un termostato di Home Assistant (ad esempio l'helper **Termostato
 generico** in modalità raffrescamento, con la temperatura di ripresa come sensore), il free cooling si
