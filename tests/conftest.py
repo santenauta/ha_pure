@@ -93,7 +93,8 @@ class FakePanel:
 
 
 @pytest.fixture
-async def panel() -> AsyncIterator[FakePanel]:
+async def panel(socket_enabled) -> AsyncIterator[FakePanel]:
+    # Sockets first: newer test harnesses block them until socket_enabled runs
     fake = FakePanel()
     await fake.start()
     yield fake

@@ -165,6 +165,9 @@
     "switch": {
       "free_cooling": {
         "name": "Free Cooling"
+      },
+      "free_heating": {
+        "name": "Free Heating"
       }
     }
   }

@@ -1,7 +1,9 @@
-"""Switch entities for Pure VMC (free cooling, over Modbus)."""
+"""Switch entities for Pure VMC (free cooling and free heating, over Modbus)."""
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable
 from time import monotonic
 from typing import Any
 
@@ -37,6 +39,9 @@ MIN_SEASON_CHANGE_INTERVAL = 15 * 60  # seconds
 # set-point no house reaches: the highest one the unit accepts.
 HOLD_SETPOINT = 30.0  # °C
 
+COOLING = "cooling"
+HEATING = "heating"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -48,10 +53,16 @@ async def async_setup_entry(
     # ruled by the season at all, and has its own bypass mode select instead.
     if coordinator.modbus is None or coordinator.data.get("bypass_mode_selectable"):
         return
-    async_add_entities([PureFreeCoolingSwitch(coordinator, entry.entry_id)])
+    control = BypassControl(hass, coordinator)
+    async_add_entities(
+        [
+            PureBypassSwitch(coordinator, entry.entry_id, control, COOLING),
+            PureBypassSwitch(coordinator, entry.entry_id, control, HEATING),
+        ]
+    )
 
 
-class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
+class BypassControl:
     """Lets a thermostat decide when the bypass may bring outside air in.
 
     A seasonal bypass cannot be commanded. The unit opens it by itself, as
@@ -63,76 +74,85 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
                 when outside is colder while the house is above the winter
                 set-point. The set-point is stored per season.
 
-    It reacts one to four minutes after a change. So:
+    It reacts one to four minutes after a change. So, with two switches of
+    which at most one is on:
 
-      on  -> season "summer": the unit free-cools whenever it can.
-      off -> the bypass is held closed: "winter" with the winter set-point at
-             its maximum while outside is colder than inside, "summer" while it
-             is warmer. The heat exchanger then keeps the house as it is.
+      free cooling on -> season "summer": the unit free-cools whenever it can.
+      free heating on -> season "winter" with the winter set-point at its
+                         maximum: the bypass opens only while outside is warmer.
+      both off        -> the bypass is held closed: "winter" with the winter
+                         set-point at its maximum while outside is colder than
+                         inside, "summer" while it is warmer. The heat exchanger
+                         then keeps the house as it is.
 
     The temperatures are only meaningful while the fans run; with the fans
     stopped the season is left alone. The set-point is left alone on units that
     report a post-heater, where it is what the heater aims for.
     """
 
-    _attr_translation_key = "free_cooling"
-    _attr_icon = "mdi:snowflake-thermometer"
-
-    def __init__(self, coordinator: PureCoordinator, entry_id: str) -> None:
-        super().__init__(coordinator, entry_id)
-        self._attr_unique_id = f"{entry_id}_free_cooling"
-        self._allowed = coordinator.data.get("season") != "winter"
+    def __init__(self, hass: HomeAssistant, coordinator: PureCoordinator) -> None:
+        self.hass = hass
+        self.coordinator = coordinator
+        self.mode: str | None = (
+            COOLING if coordinator.data.get("season") != "winter" else None
+        )
         self._last_change: float | None = None
-        self._applying = False
+        self._lock = asyncio.Lock()
+        self._following = False
+        self._listeners: list[Callable[[], None]] = []
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        if (last_state := await self.async_get_last_state()) is not None:
-            self._allowed = last_state.state == STATE_ON
+    @callback
+    def add_listener(self, listener: Callable[[], None]) -> None:
+        self._listeners.append(listener)
 
-    @property
-    def is_on(self) -> bool:
-        return self._allowed
+    @callback
+    def restore(self, mode: str, was_on: bool) -> None:
+        """Take back what a switch was before a restart."""
+        if was_on:
+            self.mode = mode
+        elif self.mode == mode:
+            self.mode = None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {"season": self.coordinator.data.get("season")}
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._async_set_allowed(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._async_set_allowed(False)
-
-    async def _async_set_allowed(self, allowed: bool) -> None:
-        self._allowed = allowed
-        self.async_write_ha_state()
+    async def async_set_mode(self, mode: str | None) -> None:
+        self.mode = mode
+        for listener in self._listeners:
+            listener()
         try:
-            await self._async_apply(commanded=True)
+            async with self._lock:
+                await self._async_apply(commanded=True)
         except PureModbusError as err:
             raise HomeAssistantError(str(err)) from err
 
     @callback
-    def _handle_coordinator_update(self) -> None:
-        super()._handle_coordinator_update()
-        # While off, the season has to follow the outside temperature, and
-        # the winter set-point has to be out of the house's reach
-        if not self._allowed and (
-            self._wanted_season() is not None or self._setpoint_needs_raising()
-        ):
-            self.hass.async_create_task(self._async_follow())
+    def follow(self) -> None:
+        """After a poll: keep the season and set-point where the mode needs them."""
+        if self._following or self._lock.locked():
+            return
+        if self._wanted_season(following=True) is None and not self._setpoint_needs_raising():
+            return
+        self._following = True
+        self.hass.async_create_task(self._async_follow())
 
     async def _async_follow(self) -> None:
         try:
-            await self._async_apply(commanded=False)
+            async with self._lock:
+                await self._async_apply(commanded=False)
         except PureModbusError as err:
             _LOGGER.warning("Could not change the season to hold the bypass: %s", err)
+        finally:
+            self._following = False
 
-    def _wanted_season(self) -> str | None:
-        """The season to be on, or None when the current one can stay."""
+    def _wanted_season(self, following: bool = False) -> str | None:
+        """The season to be on, or None when the current one can stay.
+
+        A switch that is on sets its season when it is turned on; only while
+        both are off does the season keep following the outside temperature.
+        """
         data = self.coordinator.data
-        if self._allowed:
-            wanted = "summer"
+        if self.mode is not None:
+            if following:
+                return None
+            wanted = "summer" if self.mode == COOLING else "winter"
         else:
             outside, inside = data.get("temp_external"), data.get("temp_return")
             if not data.get("fan_supply_speed") or outside is None or inside is None:
@@ -146,7 +166,7 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
         return None if data.get("season") == wanted else wanted
 
     def _setpoint_needs_raising(self) -> bool:
-        """Whether the winter set-point would still let the unit open the bypass.
+        """Whether the winter set-point would still let the unit open the bypass to cool.
 
         The register shows the set-point of the season the unit is on, and only
         settles a moment after a season change: so this is looked at on the
@@ -155,7 +175,7 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
         data = self.coordinator.data
         setpoint = data.get("temp_setpoint")
         return (
-            not self._allowed
+            self.mode != COOLING
             and data.get("season") == "winter"
             and not data.get("heater_fitted")
             and setpoint is not None
@@ -163,18 +183,12 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
         )
 
     async def _async_apply(self, commanded: bool) -> None:
-        if self._applying:
-            return
         wanted = self._wanted_season()
         if wanted is None:
             if self._setpoint_needs_raising():
-                self._applying = True
-                try:
-                    await self.coordinator.async_write_register(
-                        REG_TEMP_SETPOINT, int(HOLD_SETPOINT * 10)
-                    )
-                finally:
-                    self._applying = False
+                await self.coordinator.async_write_register(
+                    REG_TEMP_SETPOINT, int(HOLD_SETPOINT * 10)
+                )
             return
         now = monotonic()
         if (
@@ -183,12 +197,59 @@ class PureFreeCoolingSwitch(PureEntity, SwitchEntity, RestoreEntity):
             and now - self._last_change < MIN_SEASON_CHANGE_INTERVAL
         ):
             return
-        self._applying = True
-        try:
-            raw = next(raw for raw, name in SEASONS.items() if name == wanted)
-            self._last_change = now
-            await self.coordinator.async_write_register(
-                REG_PARAMETER_FLAGS, raw, SEASON_MASK
-            )
-        finally:
-            self._applying = False
+        raw = next(raw for raw, name in SEASONS.items() if name == wanted)
+        self._last_change = now
+        await self.coordinator.async_write_register(
+            REG_PARAMETER_FLAGS, raw, SEASON_MASK
+        )
+
+
+class PureBypassSwitch(PureEntity, SwitchEntity, RestoreEntity):
+    """Free cooling or free heating: whether the bypass may open to cool or to heat.
+
+    Turning one on turns the other off. Wired as the cooler and the heater of
+    a Home Assistant thermostat, the bypass then opens only while the house is
+    away from the wanted temperature and outside air brings it closer.
+    """
+
+    def __init__(
+        self,
+        coordinator: PureCoordinator,
+        entry_id: str,
+        control: BypassControl,
+        mode: str,
+    ) -> None:
+        super().__init__(coordinator, entry_id)
+        self._control = control
+        self._mode = mode
+        self._attr_translation_key = f"free_{mode}"
+        self._attr_unique_id = f"{entry_id}_free_{mode}"
+        self._attr_icon = (
+            "mdi:snowflake-thermometer" if mode == COOLING else "mdi:sun-thermometer"
+        )
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            self._control.restore(self._mode, last_state.state == STATE_ON)
+        self._control.add_listener(self.async_write_ha_state)
+
+    @property
+    def is_on(self) -> bool:
+        return self._control.mode == self._mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"season": self.coordinator.data.get("season")}
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._control.async_set_mode(self._mode)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        if self.is_on:
+            await self._control.async_set_mode(None)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        super()._handle_coordinator_update()
+        self._control.follow()

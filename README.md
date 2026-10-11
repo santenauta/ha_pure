@@ -88,6 +88,7 @@ Create solo se l'unità risponde su Modbus TCP (porta 502).
 | `select` / `sensor` | Bypass Mode | Gestione bypass (`auto` / `off` / `on`). **Modificabile** solo se il bypass è configurato come *universale* (menù Fabbrica): altrimenti l'unità ignora l'impostazione, e viene mostrata come sensore diagnostico |
 | `number` | Temperature Setpoint | Set-point temperatura, passi di 0,2 °C — **modificabile** |
 | `switch` | Free Cooling | Consente o blocca il free-cooling del bypass stagionale (vedi sotto) — pensato per essere comandato da un termostato |
+| `switch` | Free Heating | Consente o blocca il free-heating del bypass stagionale (vedi sotto); accenderlo spegne Free Cooling e viceversa |
 | `number` | Boost Timer | Minuti di booster: impostarlo avvia il booster, 0 lo annulla |
 | `sensor` | Filter Alarm Threshold | Soglia ore dell'allarme filtri — diagnostica |
 | `binary_sensor` | Anti-Frost | Antigelo scambiatore attivo |
@@ -140,20 +141,24 @@ manuale ne racconta solo metà):
 - in **inverno** lo apre quando fuori è più caldo che dentro (free heating) e anche quando fuori è più
   fresco ma la casa è sopra il set-point invernale. Il set-point è memorizzato per stagione.
 
-Reagisce da uno a quattro minuti dopo un cambio. L'interruttore **Free Cooling** sfrutta questo:
+Reagisce da uno a quattro minuti dopo un cambio. Gli interruttori **Free Cooling** e **Free Heating**
+sfruttano questo (al massimo uno dei due è acceso):
 
-- **acceso** → stagione *estate*: l'unità fa free cooling ogni volta che può;
-- **spento** → il bypass viene tenuto chiuso: *inverno* con il set-point invernale al massimo (30 °C) finché
-  fuori è più freddo che dentro, *estate* quando è più caldo; lo scambiatore conserva così la temperatura
-  di casa. La stagione segue la temperatura esterna con un'isteresi di 0,5 °C e non più di un cambio
-  ogni 15 minuti (ogni cambio è una scrittura nella memoria non volatile dell'unità). A ventilatori fermi
-  le sonde misurano solo i condotti, e la stagione non viene toccata. Sulle unità che dichiarano un
+- **Free Cooling acceso** → stagione *estate*: l'unità fa free cooling ogni volta che può;
+- **Free Heating acceso** → stagione *inverno* con il set-point invernale al massimo (30 °C): il bypass si
+  apre solo quando fuori è più caldo che dentro;
+- **entrambi spenti** → il bypass viene tenuto chiuso: *inverno* con il set-point invernale al massimo
+  finché fuori è più freddo che dentro, *estate* quando è più caldo; lo scambiatore conserva così la
+  temperatura di casa. La stagione segue la temperatura esterna con un'isteresi di 0,5 °C e non più di un
+  cambio ogni 15 minuti (ogni cambio è una scrittura nella memoria non volatile dell'unità). A ventilatori
+  fermi le sonde misurano solo i condotti, e la stagione non viene toccata. Sulle unità che dichiarano un
   post-riscaldamento il set-point non viene toccato, perché lì è la temperatura a cui punta la batteria.
 
-Collegato come *raffrescatore* di un termostato di Home Assistant (ad esempio l'helper **Termostato
-generico** in modalità raffrescamento, con la temperatura di ripresa come sensore), il free cooling si
-ferma quando la casa ha raggiunto la temperatura desiderata. Con un bypass *universale* l'interruttore
-non viene creato: lì il bypass si comanda direttamente da *Bypass Mode*.
+Collegati come *raffrescatore* e *riscaldatore* di un termostato di Home Assistant (ad esempio due helper
+**Termostato generico**, uno in raffrescamento e uno in riscaldamento, oppure un termostato caldo/freddo),
+il bypass si apre solo finché la casa è lontana dalla temperatura desiderata e l'aria esterna la avvicina.
+Con un bypass *universale* gli interruttori non vengono creati: lì il bypass si comanda direttamente da
+*Bypass Mode*.
 
 ## Diagnostica
 

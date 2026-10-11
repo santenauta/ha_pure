@@ -1,4 +1,4 @@
-"""The free cooling switch: holding a seasonal bypass closed through the season."""
+"""The free cooling and free heating switches: steering a seasonal bypass through the season."""
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -15,6 +15,7 @@ from .test_init import HOST, _modbus_on
 pytestmark = pytest.mark.enable_socket
 
 SWITCH = "switch.pure_vmc_free_cooling"
+HEATING_SWITCH = "switch.pure_vmc_free_heating"
 SUMMER, WINTER = 2, 1
 
 
@@ -40,8 +41,8 @@ async def _refresh(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     await hass.async_block_till_done()
 
 
-async def _turn(hass: HomeAssistant, service: str) -> None:
-    await hass.services.async_call("switch", service, {"entity_id": SWITCH}, blocking=True)
+async def _turn(hass: HomeAssistant, service: str, switch: str = SWITCH) -> None:
+    await hass.services.async_call("switch", service, {"entity_id": switch}, blocking=True)
     await hass.async_block_till_done()
 
 
@@ -125,6 +126,56 @@ async def test_on_returns_to_summer(
     assert panel.registers[20] == 34  # the other bits of the register untouched
 
 
+async def test_free_heating_lets_the_bypass_open_only_to_heat(
+    hass: HomeAssistant, panel: FakePanel, entry: MockConfigEntry
+) -> None:
+    # A spring afternoon: outside warmer than a cool house
+    _set_temperatures(panel, outside=24.0, inside=19.0)
+    await _refresh(hass, entry)
+    await _turn(hass, "turn_on", HEATING_SWITCH)
+    assert panel.registers[20] & 0b11 == WINTER
+    assert panel.stored[-1] == 0b01
+    # Turning one on turns the other off
+    assert hass.states.get(HEATING_SWITCH).state == "on"
+    assert hass.states.get(SWITCH).state == "off"
+
+    # The winter set-point goes out of reach on the next poll, so the unit
+    # never opens the bypass to cool
+    await _refresh(hass, entry)
+    assert panel.registers[52] == 300
+
+    # Evening: outside colder. Unlike "both off", free heating does not follow
+    # the outside temperature: "winter" already keeps the bypass closed then.
+    _set_temperatures(panel, outside=12.0, inside=20.0)
+    with patch("custom_components.pure.switch.MIN_SEASON_CHANGE_INTERVAL", 0):
+        await _refresh(hass, entry)
+        _set_temperatures(panel, outside=26.0, inside=20.0)
+        await _refresh(hass, entry)
+    assert panel.registers[20] & 0b11 == WINTER
+
+
+async def test_cooling_and_heating_exclude_each_other(
+    hass: HomeAssistant, panel: FakePanel, entry: MockConfigEntry
+) -> None:
+    _set_temperatures(panel, outside=19.0, inside=25.0)
+    await _turn(hass, "turn_on", HEATING_SWITCH)
+    assert panel.registers[20] & 0b11 == WINTER
+    await _turn(hass, "turn_on", SWITCH)
+    assert panel.registers[20] & 0b11 == SUMMER
+    assert hass.states.get(HEATING_SWITCH).state == "off"
+
+    # Turning off a switch that is already off changes nothing
+    await _turn(hass, "turn_off", HEATING_SWITCH)
+    assert hass.states.get(SWITCH).state == "on"
+    assert panel.registers[20] & 0b11 == SUMMER
+
+    # Both off: back to holding the bypass closed
+    await _turn(hass, "turn_off", SWITCH)
+    assert panel.registers[20] & 0b11 == WINTER
+    assert hass.states.get(SWITCH).state == "off"
+    assert hass.states.get(HEATING_SWITCH).state == "off"
+
+
 async def test_not_offered_for_a_universal_bypass(
     hass: HomeAssistant, panel: FakePanel, socket_enabled
 ) -> None:
@@ -135,4 +186,5 @@ async def test_not_offered_for_a_universal_bypass(
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     assert hass.states.get(SWITCH) is None
+    assert hass.states.get(HEATING_SWITCH) is None
     assert hass.states.get("select.pure_vmc_bypass_mode") is not None
