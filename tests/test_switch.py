@@ -126,6 +126,32 @@ async def test_on_returns_to_summer(
     assert panel.registers[20] == 34  # the other bits of the register untouched
 
 
+async def test_free_cooling_lowers_the_summer_setpoint(
+    hass: HomeAssistant, panel: FakePanel, entry: MockConfigEntry
+) -> None:
+    # The unit may want the house above the summer set-point before it
+    # free-cools: with free cooling on, the thermostat decides instead
+    assert panel.registers[52] == 260
+    await _refresh(hass, entry)
+    assert panel.registers[52] == 200
+    assert panel.stored[-1] == 0b10
+
+    # Off on a summer night: winter, whose own set-point goes out of reach
+    _set_temperatures(panel, outside=19.0, inside=24.0)
+    await _refresh(hass, entry)
+    await _turn(hass, "turn_off")
+    await _refresh(hass, entry)
+    assert panel.registers[20] & 0b11 == WINTER
+    assert panel.registers[52] == 300
+
+    # Back on: the summer set-point is still the low one, nothing to write
+    stored = len(panel.stored)
+    await _turn(hass, "turn_on")
+    await _refresh(hass, entry)
+    assert panel.registers[52] == 200
+    assert len(panel.stored) == stored + 1  # the season change only
+
+
 async def test_free_heating_lets_the_bypass_open_only_to_heat(
     hass: HomeAssistant, panel: FakePanel, entry: MockConfigEntry
 ) -> None:

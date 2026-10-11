@@ -136,15 +136,19 @@ Due particolarità del pannello, verificate su una Pure 250:
 Un bypass *stagionale* non si comanda: l'unità lo apre da sola. Come osservato su una Pure 250 (il
 manuale ne racconta solo metà):
 
-- in **estate** lo apre ogni volta che fuori è più fresco che dentro, qualunque sia il set-point: in una
-  notte d'estate continua a raffrescare la casa ben oltre il comfort;
+- in **estate** lo apre quando fuori è più fresco che dentro e, a quanto pare, la casa è sopra il set-point
+  estivo (con set-point 26 °C e 24 °C in casa è rimasto chiuso; con 20 °C si è aperto in tre minuti, ma
+  poi non si è richiuso tornando a 26): in una notte d'estate continua a raffrescare la casa ben oltre il
+  comfort;
 - in **inverno** lo apre quando fuori è più caldo che dentro (free heating) e anche quando fuori è più
   fresco ma la casa è sopra il set-point invernale. Il set-point è memorizzato per stagione.
 
 Reagisce da uno a quattro minuti dopo un cambio. Gli interruttori **Free Cooling** e **Free Heating**
 sfruttano questo (al massimo uno dei due è acceso):
 
-- **Free Cooling acceso** → stagione *estate*: l'unità fa free cooling ogni volta che può;
+- **Free Cooling acceso** → stagione *estate* con il set-point estivo basso (20 °C, così a decidere quando
+  basta è il termostato, ma un'unità rimasta senza Home Assistant non raffresca la casa oltre): l'unità fa
+  free cooling ogni volta che fuori è più fresco;
 - **Free Heating acceso** → stagione *inverno* con il set-point invernale al massimo (30 °C): il bypass si
   apre solo quando fuori è più caldo che dentro;
 - **entrambi spenti** → il bypass viene tenuto chiuso: *inverno* con il set-point invernale al massimo

@@ -39,6 +39,15 @@ MIN_SEASON_CHANGE_INTERVAL = 15 * 60  # seconds
 # set-point no house reaches: the highest one the unit accepts.
 HOLD_SETPOINT = 30.0  # °C
 
+# In "summer" the unit may also want the house above the summer set-point
+# before it opens the bypass: a Pure 250 on summer with set-point 26 kept it
+# closed for 14 minutes at 24 °C inside, 21.5 °C outside, and opened it three
+# minutes after the set-point went to 20 (it then stayed open with 26 again,
+# so this is not certain). With free cooling on, the thermostat decides when
+# the house is cool enough, so the summer set-point goes low; not lower than
+# this, so a unit left on its own does not cool the house into the cold.
+COOL_SETPOINT = 20.0  # °C
+
 COOLING = "cooling"
 HEATING = "heating"
 
@@ -68,8 +77,9 @@ class BypassControl:
     A seasonal bypass cannot be commanded. The unit opens it by itself, as
     observed on a Pure 250 (the manual tells only half of it):
 
-      summer -> whenever outside is colder than inside, whatever the set-point:
-                on a summer night it cools the house well past comfortable;
+      summer -> when outside is colder than inside (and, it seems, the house
+                above the summer set-point): on a summer night it cools the
+                house well past comfortable;
       winter -> when outside is warmer than inside (free heating), and also
                 when outside is colder while the house is above the winter
                 set-point. The set-point is stored per season.
@@ -77,7 +87,8 @@ class BypassControl:
     It reacts one to four minutes after a change. So, with two switches of
     which at most one is on:
 
-      free cooling on -> season "summer": the unit free-cools whenever it can.
+      free cooling on -> season "summer" with the summer set-point low: the
+                         unit free-cools whenever outside is colder.
       free heating on -> season "winter" with the winter set-point at its
                          maximum: the bypass opens only while outside is warmer.
       both off        -> the bypass is held closed: "winter" with the winter
@@ -128,7 +139,7 @@ class BypassControl:
         """After a poll: keep the season and set-point where the mode needs them."""
         if self._following or self._lock.locked():
             return
-        if self._wanted_season(following=True) is None and not self._setpoint_needs_raising():
+        if self._wanted_season(following=True) is None and self._wanted_setpoint() is None:
             return
         self._following = True
         self.hass.async_create_task(self._async_follow())
@@ -165,8 +176,11 @@ class BypassControl:
                 return None
         return None if data.get("season") == wanted else wanted
 
-    def _setpoint_needs_raising(self) -> bool:
-        """Whether the winter set-point would still let the unit open the bypass to cool.
+    def _wanted_setpoint(self) -> float | None:
+        """The set-point the current season needs, or None when it can stay.
+
+        Out of reach in winter, so the unit never opens the bypass to cool;
+        low in summer while free cooling is on, so the thermostat decides.
 
         The register shows the set-point of the season the unit is on, and only
         settles a moment after a season change: so this is looked at on the
@@ -174,20 +188,22 @@ class BypassControl:
         """
         data = self.coordinator.data
         setpoint = data.get("temp_setpoint")
-        return (
-            self.mode != COOLING
-            and data.get("season") == "winter"
-            and not data.get("heater_fitted")
-            and setpoint is not None
-            and setpoint < HOLD_SETPOINT
-        )
+        if setpoint is None or data.get("heater_fitted"):
+            return None
+        season = data.get("season")
+        if self.mode == COOLING:
+            if season == "summer" and setpoint > COOL_SETPOINT:
+                return COOL_SETPOINT
+        elif season == "winter" and setpoint < HOLD_SETPOINT:
+            return HOLD_SETPOINT
+        return None
 
     async def _async_apply(self, commanded: bool) -> None:
         wanted = self._wanted_season()
         if wanted is None:
-            if self._setpoint_needs_raising():
+            if (setpoint := self._wanted_setpoint()) is not None:
                 await self.coordinator.async_write_register(
-                    REG_TEMP_SETPOINT, int(HOLD_SETPOINT * 10)
+                    REG_TEMP_SETPOINT, int(setpoint * 10)
                 )
             return
         now = monotonic()
