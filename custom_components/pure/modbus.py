@@ -457,6 +457,8 @@ def decode_registers(registers: dict[int, int]) -> dict[str, Any]:
         **_factory_configuration(registers),
         "season": SEASONS.get(parameters & 0b11),
         "bypass_mode": BYPASS_MODES.get(parameters >> 2 & 0b11),
+        # CONFIG_FLAGS_1 bits 0-2: the kind of post-heating, 0 = none
+        "heater_fitted": bool(registers[REG_CONFIG_FLAGS_1] & 0b111),
         "bypass_mode_selectable": (registers[REG_CONFIG_FLAGS_1] >> 10 & 0b11)
         == BYPASS_UNIVERSAL_ON_OFF,
         "operating_mode": operating_mode,

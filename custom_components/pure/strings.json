@@ -241,6 +241,14 @@
       "filters_replaced": {
         "name": "Filters Replaced"
       }
+    },
+    "switch": {
+      "free_cooling": {
+        "name": "Free Cooling"
+      },
+      "free_heating": {
+        "name": "Free Heating"
+      }
     }
   }
 }

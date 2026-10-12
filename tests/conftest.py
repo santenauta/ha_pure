@@ -34,11 +34,15 @@ class FakePanel:
     Like the real one it acknowledges every write, silently drops them while
     ``locked_out`` (the 60 s after a web-page change), raises speeds below
     20 % to 20 %, and clears the "store" bits of register 5 by itself; which
-    ones were asked for is kept in ``stored``.
+    ones were asked for is kept in ``stored``. It keeps one set-point per
+    season: register 52 shows the one of the season the unit is on.
     """
 
     def __init__(self) -> None:
         self.registers: dict[int, int] = dict(LIVE_REGISTERS)
+        self.setpoints: dict[int, int] = {
+            season: self.registers[52] for season in (0, 1, 2)
+        }
         self.requests = 0
         self.locked_out = False
         self.stored: list[int] = []
@@ -75,6 +79,9 @@ class FakePanel:
                             self.stored.append(value >> 14)
                         value &= 0x3FFF
                     if not self.locked_out:
+                        if address + 1 == 20 and (value ^ self.registers[20]) & 0b11:
+                            self.setpoints[self.registers[20] & 0b11] = self.registers[52]
+                            self.registers[52] = self.setpoints[value & 0b11]
                         self.registers[address + 1] = value
                     body = struct.pack(">BHH", function, address, count)
                 else:
@@ -93,7 +100,8 @@ class FakePanel:
 
 
 @pytest.fixture
-async def panel() -> AsyncIterator[FakePanel]:
+async def panel(socket_enabled) -> AsyncIterator[FakePanel]:
+    # Sockets first: newer test harnesses block them until socket_enabled runs
     fake = FakePanel()
     await fake.start()
     yield fake
